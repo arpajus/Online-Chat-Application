@@ -1,25 +1,38 @@
-import grpc
 from concurrent import futures
+
+import grpc
 import time
-import chat_private_pb2
-import chat_private_pb2_grpc
 
-class PrivateChatServicer(chat_private_pb2_grpc.PrivateChatServicer):
-    def ConnectChat(self, request_iterator, context):
-        for new_message in request_iterator:
-            print(f"Received message from {new_message.sender}: {new_message.content}")
-            yield new_message  # Echo the received message back to the client
+import chat_pb2 as chat
+import chat_pb2_grpc as rpc
 
-def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    chat_private_pb2_grpc.add_PrivateChatServicer_to_server(PrivateChatServicer(), server)
-    server.add_insecure_port('[::]:50051')
-    server.start()
-    try:
+
+class ChatServer(rpc.ChatServerServicer): 
+
+    def __init__(self):
+        self.chats = []
+
+    def ChatStream(self, request_iterator, context):
+
+        lastindex = 0
         while True:
-            time.sleep(86400)
-    except KeyboardInterrupt:
-        server.stop(0)
+            while len(self.chats) > lastindex:
+                n = self.chats[lastindex]
+                lastindex += 1
+                yield n
+
+    def SendNote(self, request: chat.Note, context):
+        print("[{}] {}".format(request.name, request.message))
+        self.chats.append(request)
+        return chat.Empty()  
+
 
 if __name__ == '__main__':
-    serve()
+    port = 11912  
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    rpc.add_ChatServerServicer_to_server(ChatServer(), server) 
+    print('Starting server. Listening...')
+    server.add_insecure_port('[::]:' + str(port))
+    server.start()
+    while True:
+        time.sleep(64 * 64 * 100)
