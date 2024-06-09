@@ -28,7 +28,7 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
             grpc.channel_ready_future(self.server_channel).result(timeout=5)
             print("Connected to the server")
         except grpc.FutureTimeoutError:
-            print("Fail: It can't be connected to the server")
+            print("Fail: The server is not ready")
             exit(1)
 
     def login(self):
@@ -69,7 +69,7 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
             if not response.success:
                 print("The other person is not connected")
         except grpc.RpcError as e:
-            print(f"Fail of gRPC")
+            print(f"The other person is not on the chat")
 
     def ReceiveMessage(self, request, context):
         print(f"{request.sender}: {request.message}")
