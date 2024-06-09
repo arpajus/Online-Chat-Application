@@ -23,6 +23,17 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         self.thread_stop = threading.Event()
         self.thread_discovery = threading.Event()
 
+
+    """
+    Check the connection status with the server.
+
+    Raises:
+        grpc.FutureTimeoutError: If the server is not ready within the specified timeout.
+
+    Returns:
+        None
+    """
+
     def check_server_connection(self):
         try:
             grpc.channel_ready_future(self.server_channel).result(timeout=5)
@@ -31,6 +42,15 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
             print("Fail: The server is not ready")
             exit(1)
 
+    """
+    Logs in the user to the chat server.
+
+    Returns:
+        int: The port number for the user's connection if login is successful, None otherwise.
+
+    Raises:
+        grpc.RpcError: If there is an error during the gRPC call.
+    """
     def login(self):
         request = chat_pb2.LoginRequest(username=self.username)
         try:
@@ -46,6 +66,18 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
             print(f"Fail of gRPC")
             return None
 
+    """
+    Connect to a chat with the given chat_id.
+
+    Args:
+    chat_id (str): The ID of the chat to connect to.
+
+    Returns:
+        bool: True if the connection is successful, False otherwise.
+
+    Raises:
+        grpc.RpcError: If there is an error during the gRPC call.
+    """
     def connect_to_chat(self, chat_id):
         request = chat_pb2.ConnectionRequest(username=self.username, chat_id=chat_id)
         try:
@@ -62,7 +94,19 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         except grpc.RpcError as e:
             print(f"Fail of gRPC")
 
-    def send_messages(self, chat_id, message):
+    """
+    Sends a message to the other person in the chat.
+
+    Args:
+        message (str): The message to be sent.
+
+    Returns:
+        None
+
+    Raises:
+        grpc.RpcError: If there is an error during the gRPC call.
+    """
+    def send_messages(self,chat_id, message):
         request = chat_pb2.MessageRequest(sender=self.username, message=message)
         try:
             response = self.user_stub.ReceiveMessage(request)
@@ -71,10 +115,31 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         except grpc.RpcError as e:
             print(f"The other person is not on the chat")
 
+    """ 
+    Receives a message from the other person in the chat.
+
+    Args:
+        request (chat_pb2.MessageRequest): The request containing the message details.
+
+    Returns:
+        chat_pb2.Response: A response indicating the success of receiving the message.
+
+    """
     def ReceiveMessage(self, request, context):
         print(f"{request.sender}: {request.message}")
         return chat_pb2.Response(success=True)
 
+    """
+    Starts the chat client server and handles the communication with the chat server.
+
+    Args:
+        client: The client object for the chat.
+        port_client (int): The port number for the client connection.
+        chat_id (str): The ID of the chat to connect to.
+
+    Returns:
+        None
+    """
     def start(self, client, port_client, chat_id):
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
         chat_pb2_grpc.add_ChatClientServicer_to_server(client, self.server)
@@ -96,6 +161,18 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
 
         self.server.stop(0)
 
+    """
+    Set up the RabbitMQ connection and channel for the chat client.
+
+    Args:
+        chat_id (str): The ID of the chat to set up the RabbitMQ exchange for.
+
+    Raises:
+        pika.exceptions.AMQPError: If there is an error during the RabbitMQ setup.
+
+    Returns:
+        None
+    """
     def setup_rabbitmq(self, chat_id):
         try:
             self.rabbitmq_connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
@@ -105,11 +182,36 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         except pika.exceptions.AMQPError as e:
             print(f"Fail of RabbitMQ")
 
+    """
+    Set up the RabbitMQ connection and channel for subscribing to a group chat.
+
+    Args:
+        chat_id (str): The ID of the chat to subscribe to.
+
+    Raises:
+        pika.exceptions.AMQPError: If there is an error during the RabbitMQ setup.
+
+    Returns:
+        None
+    """
     def subscribe_to_group_chat(self, chat_id):
         self.setup_rabbitmq(chat_id)
         self.thread = threading.Thread(target=self.message_listener, args=(chat_id,))
         self.thread.start()
 
+    """
+    Listens for messages in the RabbitMQ queue for the specified chat_id.
+
+    If there is a connection with RabbitMQ, it declares a queue, binds it to the exchange, and starts consuming messages.
+    Each received message is decoded and printed.
+    The method continues to listen for messages until the thread_stop event is set.
+
+    Args:
+        chat_id (str): The ID of the chat to listen for messages.
+
+    Returns:
+        None
+    """
     def message_listener(self, chat_id):
         if self.rabbitmq_connection:
             result = self.rabbitmq_channel.queue_declare(queue='', exclusive=True)
@@ -127,6 +229,20 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         else:
             print("No connection with Rabbit")
 
+
+    """
+    Sends a message to the group chat using RabbitMQ.
+
+    If there is no connection with RabbitMQ, it prints a message and returns.
+    The method continuously prompts the user for a message input until the user types 'exit'.
+    Each message is formatted with the username and sent to the RabbitMQ exchange for the group chat.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     def send_group_message(self, chat_id):
         if not self.rabbitmq_connection:
             print("No connection with Rabbit")
@@ -142,6 +258,17 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
 
         self.rabbitmq_connection.close()
 
+    """
+    Discover active chats by setting up RabbitMQ for discovery, publishing a discovery event, and listening for responses.
+    This method initiates the process by setting up RabbitMQ for the 'discovery' exchange, publishing a discovery message with the client's username and connection details, and then listening for responses from other active chats.
+    Once a response is received, the method sets the thread_discovery event to indicate that the discovery process is complete.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     def Discover_Chats(self):
         self.setup_rabbitmq('discovery')
         self.publish_discovery_event()
@@ -149,6 +276,18 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         self.discover.start()
         self.thread_discovery.wait()
 
+    """
+    Publishes a discovery event to the 'discovery' exchange in RabbitMQ.
+
+    This method declares the 'discovery' exchange with a 'fanout' type, encodes the discovery message containing the client's username and connection details, and publishes it to the exchange.
+    Additionally, it sends a gRPC request to the server for discovery purposes.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     def publish_discovery_event(self):
         self.rabbitmq_channel.exchange_declare(exchange='discovery', exchange_type='fanout')
         discovery_message = f"{self.username}: {self.ip}:{self.port}"
@@ -156,6 +295,19 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         request = chat_pb2.LoginRequest(username=self.username)
         response = self.server_stub.Discovery(request)
 
+    """
+    Listens for messages in the RabbitMQ queue for the specified chat_id.
+
+    If there is a connection with RabbitMQ, it declares a queue, binds it to the exchange, and starts consuming messages.
+    Each received message is decoded and printed.
+    The method continues to listen for messages until the thread_stop event is set.
+
+    Args:
+        chat_id (str): The ID of the chat to listen for messages.
+
+    Returns:
+        None
+    """
     def discovery_listener(self):
         result = self.rabbitmq_channel.queue_declare(queue='', exclusive=True)
         queue_name = result.method.queue
@@ -173,6 +325,18 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         while not self.thread_discovery.is_set():
             self.rabbitmq_channel.connection.process_data_events()
 
+    """
+    Set up the RabbitMQ connection and channel for a specific queue.
+
+    Args:
+        queue_name (str): The name of the queue to be declared.
+
+    Raises:
+        pika.exceptions.AMQPError: If there is an error during the RabbitMQ setup.
+
+    Returns:
+        None
+    """
     def setup_rabbitmq_queue(self, queue_name):
         try:
             self.rabbitmq_connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
@@ -181,11 +345,35 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         except pika.exceptions.AMQPError as e:
             print(f"Fail of RabbitMQ")
 
+    """
+    Set up the RabbitMQ connection and channel for subscribing to a specific queue for receiving insults.
+
+    Args:
+        queue_name (str): The name of the queue to subscribe to for receiving insults.
+
+    Raises:
+        pika.exceptions.AMQPError: If there is an error during the RabbitMQ setup.
+
+    Returns:
+        None
+    """
     def subscribe_to_insult_queue(self, queue_name):
         self.setup_rabbitmq_queue(queue_name)
         self.thread = threading.Thread(target=self.insult_listener, args=(queue_name,))
         self.thread.start()
 
+    """
+    Listens for messages in the RabbitMQ queue for the specified queue_name.
+
+    If there is a connection with RabbitMQ, it sets up a callback function to decode and print the received message.
+    The method then starts consuming messages from the specified queue until the thread_stop event is set.
+
+    Args:
+        queue_name (str): The name of the queue to listen for messages.
+
+    Returns:
+        None
+    """
     def insult_listener(self, queue_name):
         if self.rabbitmq_connection:
             def callback(ch, method, properties, body):
@@ -198,6 +386,20 @@ class ChatClient(chat_pb2_grpc.ChatClientServicer):
         else:
             print("No connection")
 
+
+    """
+    Sends an insult message to a specific queue using RabbitMQ.
+
+    If there is no connection with RabbitMQ, it prints a message and returns.
+    The method continuously prompts the user for an insult message input until the user types 'exit'.
+    Each insult message is formatted with the username and sent to the specified queue in RabbitMQ.
+
+    Args:
+        queue_name (str): The name of the queue to send the insult message to.
+
+    Returns:
+        None
+    """
     def send_insult(self, queue_name):
         if not self.rabbitmq_connection:
             print("No connection")
